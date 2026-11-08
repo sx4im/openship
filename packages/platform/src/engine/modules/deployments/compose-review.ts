@@ -83,6 +83,23 @@ export function composeSourceChanges(rows: readonly Service[], services: readonl
   };
 }
 
+/**
+ * The revision a deploy is reviewed against. The dashboard Configure screen
+ * sends the preview revision it showed the operator. An automated caller that
+ * cannot preview (CLI, incoming webhook) may instead pass
+ * `acceptComposeChanges` to approve the source exactly as resolved for this
+ * deploy — the same baseline a Configure approval persists, so the gate is
+ * satisfied without weakening it for anyone else.
+ */
+export function reviewedComposeRevision(
+  projectId: string,
+  source: readonly SourceService[],
+  options: { composeRevision?: string; acceptComposeChanges?: boolean },
+): string | undefined {
+  if (options.acceptComposeChanges) return composeSourceRevision(projectId, source);
+  return options.composeRevision;
+}
+
 export function assertComposeReviewed(
   projectId: string,
   rows: readonly Service[],

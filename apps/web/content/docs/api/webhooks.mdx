@@ -186,6 +186,13 @@ The signature verified but the body didn't parse as JSON. Confirm the provider i
 `Content-Type: application/json` and the payload isn't truncated (the 5 MB body cap applies).
 </Callout>
 
+<Callout title="409 — Compose review required" type="warn">
+The project's Compose configuration changed since it was last reviewed, so the deploy is refused until
+someone approves the current source. The error lists the added, changed and removed services. Approve it
+for one deploy with `openship deploy --accept-compose-changes`, or enable `acceptComposeChanges` on the
+incoming hook; the dashboard approves it from the Configure screen.
+</Callout>
+
 <Callout title="200 with success: false" type="info">
 A verified delivery whose handler threw still returns `200` — on purpose, so GitHub doesn't retry into a
 duplicate deploy. The failure detail is in the response body; check your instance logs for the

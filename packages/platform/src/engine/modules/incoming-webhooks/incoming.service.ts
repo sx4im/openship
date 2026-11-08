@@ -356,6 +356,10 @@ export async function dispatchIncomingWebhook(
         trigger: "webhook",
         serviceIds,
         strictServiceScope: serviceIds !== undefined,
+        // Opt-in per hook (see IncomingWebhookActionConfig): only a hook
+        // whose owner enabled it may approve a pending Compose review, so a
+        // bare hook URL cannot silently auto-approve.
+        acceptComposeChanges: cfg.acceptComposeChanges === true,
         // Incoming deploy hooks promise a redeploy, not just a container
         // recreate from an already-cached mutable tag. Persist this intent on
         // the deployment snapshot so the worker force-pulls selected external

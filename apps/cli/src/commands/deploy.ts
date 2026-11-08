@@ -1,3 +1,4 @@
+import { isRecord } from "@repo/contracts";
 import { reportCaughtError as observeCaughtError } from "@repo/core/diagnostics";
 import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
 /**
@@ -9,7 +10,8 @@ import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
  *                 the shared SDK source workflow.
  *
  * The git path's controller accepts an allowlist body ({ projectId, branch,
- * commitSha, environment, serverId, forceAll, serviceIds, smartRoute, refresh }) and
+ * commitSha, environment, serverId, forceAll, serviceIds, smartRoute, refresh,
+ * acceptComposeChanges }) and
  * responds 202 with { data: { deployment_id, project_id } }; --watch attaches
  * to the GET /:id/stream SSE path.
  */
@@ -47,6 +49,10 @@ export const deployCommand = new Command("deploy")
   .option("--service-ids <ids>", "Comma-separated service IDs to deploy (smart routing)")
   .option("--smart-route", "Rebuild only services changed since the active deploy")
   .option("--refresh", "Re-apply current env to the active deploy (no git pull, no rebuild)")
+  .option(
+    "--accept-compose-changes",
+    "Approve the current Compose source for this deploy (same as accepting the pending review in Configure)",
+  )
   .option("--folder", "Upload the current folder as source (also works inside a Git repository)")
   .option(
     "--name <name>",
@@ -149,6 +155,7 @@ export const deployCommand = new Command("deploy")
         serviceIds,
         smartRoute: opts.smartRoute || undefined,
         refresh: opts.refresh || undefined,
+        acceptComposeChanges: opts.acceptComposeChanges || undefined,
       };
 
       const spinner = isJsonMode() ? null : ora("Triggering deployment").start();
@@ -159,6 +166,23 @@ export const deployCommand = new Command("deploy")
       rethrowCommandExit(e);
         spinner?.fail("Deployment failed to start");
         err(e instanceof ApiError ? e.message : String(e));
+        // The review gate (COMPOSE_REVIEW_REQUIRED) already returns what
+        // changed; show it so the operator can decide whether to re-run
+        // with --accept-compose-changes instead of opening the app to look.
+        if (e instanceof ApiError && e.code === "COMPOSE_REVIEW_REQUIRED") {
+          const changes = isRecord(e.body) ? e.body.composeChanges : undefined;
+          if (isRecord(changes)) {
+            for (const [label, key] of [
+              ["added", "added"],
+              ["changed", "changed"],
+              ["removed", "removed"],
+            ] as const) {
+              const names = changes[key];
+              if (Array.isArray(names) && names.length > 0) err(`  ${label}: ${names.join(", ")}`);
+            }
+          }
+          err("Re-run with --accept-compose-changes to approve the current Compose source.");
+        }
         exitCommand(1);
       }
 

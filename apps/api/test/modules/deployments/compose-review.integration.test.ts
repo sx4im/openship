@@ -10,6 +10,7 @@ import {
   assertComposeReviewed,
   composeSourceRevision,
   composeSourceChanges,
+  reviewedComposeRevision,
 } from "@repo/platform/engine/modules/deployments/compose-review";
 import { seedOrg, seedProject, seedDeployment, seedServiceDeployment } from "../../helpers/seed";
 import { parseComposeFile } from "@repo/platform/engine/lib/compose-parser";
@@ -154,6 +155,84 @@ describe("Compose source review and synchronization", () => {
         (s) => s.name === retired.name,
       ),
     ).toHaveLength(1);
+  });
+
+  it("lets an automated deploy approve the current source, and the refusal names the changes", async () => {
+    const org = await seedOrg({ ownsHost: true });
+    const localPath = await mkdtemp(join(tmpdir(), "compose-review-accept-"));
+    dirs.push(localPath);
+    const project = await seedProject(org.organizationId, {
+      framework: "docker-compose",
+      localPath,
+      composePath: "compose.yml",
+    });
+    const original = [
+      { name: "db", image: "postgres:16", environment: { PASSWORD: "source-secret" } },
+      { name: "old-worker", image: "busybox", environment: { TOKEN: "saved-secret" } },
+    ];
+    await repos.service.syncFromCompose(project.id, original, { composeAuthoritative: true });
+    const before = await repos.service.listByProject(project.id);
+    await writeFile(
+      join(localPath, "compose.yml"),
+      [
+        "services:",
+        "  db:",
+        "    image: postgres:17",
+        "    environment:",
+        "      PASSWORD: source-secret",
+        "  worker:",
+        "    image: busybox",
+        "    environment:",
+        "      API_TOKEN: <redacted>",
+      ].join("\n"),
+    );
+    const source = (
+      await resolveProjectInfo({
+        source: "local",
+        path: localPath,
+        composePath: "compose.yml",
+        projectId: project.id,
+      })
+    ).services!;
+
+    // Without approval the gate refuses, and the refusal names what changed —
+    // this is what a webhook/CLI caller sees, and what the CLI prints.
+    let caught: unknown;
+    try {
+      assertComposeReviewed(project.id, before, source);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ code: "COMPOSE_REVIEW_REQUIRED" });
+    expect((caught as { details: unknown }).details).toEqual({
+      projectId: project.id,
+      composeChanges: { added: ["worker"], changed: ["db"], removed: ["old-worker"] },
+    });
+
+    // The approval resolution: nothing approved by default, a preview revision
+    // is honoured, and accepting approves exactly the source resolved for
+    // this deploy — the same baseline a Configure approval persists.
+    expect(reviewedComposeRevision(project.id, source, {})).toBeUndefined();
+    expect(reviewedComposeRevision(project.id, source, { composeRevision: "preview-rev" })).toBe(
+      "preview-rev",
+    );
+    expect(reviewedComposeRevision(project.id, source, { acceptComposeChanges: true })).toBe(
+      composeSourceRevision(project.id, source),
+    );
+
+    // With the acceptance the gate passes, and reconciling lands the same
+    // state as the Configure path.
+    assertComposeReviewed(
+      project.id,
+      before,
+      source,
+      reviewedComposeRevision(project.id, source, { acceptComposeChanges: true }),
+    );
+    await repos.service.reconcileFromCompose(project.id, source);
+    expect((await repos.service.listByProject(project.id)).map((s) => s.name).sort()).toEqual([
+      "db",
+      "worker",
+    ]);
   });
 
   it("does not revive an old identity over a current service that reused its name", async () => {

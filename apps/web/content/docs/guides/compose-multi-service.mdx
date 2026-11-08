@@ -301,9 +301,18 @@ Saved project and service environment values remain in place. A key omitted from
 as a local override, and an unresolved expression cannot replace the only saved value for that key.
 Remove a saved variable explicitly from the environment editor when you no longer need it.
 
-If an older version left a pending review, the next deploy reconciles it automatically. The legacy
-resolution actions remain available: **Accept upstream** applies source configuration while preserving
-saved environment values; **Keep mine** retains the current configuration.
+A review left by an older version is cleared automatically by the next deploy only when the Compose
+source has not changed since. If it has changed, the deploy is refused until the review is approved,
+as described below. The legacy resolution actions remain available: **Accept upstream** applies source
+configuration while preserving saved environment values; **Keep mine** retains the current
+configuration.
+
+A pending review blocks automated deploys. A webhook or `openship deploy` is refused with HTTP 409
+(`COMPOSE_REVIEW_REQUIRED`) while a review is pending, and the error lists the added, changed and
+removed services. Approve the current source for one deploy with `openship deploy
+--accept-compose-changes`, or enable `acceptComposeChanges` on an incoming hook. The per-service
+`drift accept|keep` commands only act on fields you edited; when the drift list is empty they cannot
+clear this review.
 
 <Tabs items={['Dashboard', 'CLI']}>
 

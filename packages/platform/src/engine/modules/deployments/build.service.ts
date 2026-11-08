@@ -82,7 +82,7 @@ import {
   type ProjectInfo,
   type ProjectSourceEnv,
 } from "./prepare.service";
-import { assertComposeReviewed } from "./compose-review";
+import { assertComposeReviewed, reviewedComposeRevision } from "./compose-review";
 import { ComposeConfigurationError } from "./compose-configuration-error";
 import { getFolderSession } from "../projects/folder/session-store";
 import {
@@ -907,6 +907,13 @@ async function reconcileComposeSource(
   options: {
     changedPaths?: string[] | null;
     composeRevision?: string;
+    /**
+     * Automation (CLI/webhook) approval of the current Compose source. When
+     * set, the gate is reviewed against the source exactly as resolved for
+     * this deploy — see reviewedComposeRevision. Never set by the dashboard,
+     * which sends the preview revision instead.
+     */
+    acceptComposeChanges?: boolean;
     interpolationEnv?: Record<string, string>;
   } = {},
 ): Promise<ProjectInfo | undefined> {
@@ -988,7 +995,12 @@ async function reconcileComposeSource(
         `The configured compose path "${project.composePath ?? "repository root"}" contains no services.`,
       );
     }
-    assertComposeReviewed(project.id, composeRows, services, options.composeRevision);
+    assertComposeReviewed(
+      project.id,
+      composeRows,
+      services,
+      reviewedComposeRevision(project.id, services, options),
+    );
     await repos.service.reconcileFromCompose(project.id, services);
     return info;
   } catch (err) {
@@ -2730,6 +2742,15 @@ export interface DeploymentTriggerInput {
      * has a complete fan-out record for this deployment.
      */
     serviceIds?: string[];
+    /**
+     * Approve the current Compose source for THIS deploy, as the Configure
+     * screen does when it sends a composeRevision. Only for callers that
+     * cannot present a preview — the CLI (`--accept-compose-changes`) and
+     * incoming webhooks whose owner enabled it. The review gate is still
+     * enforced; this is an explicit approval by an authorized caller, not a
+     * bypass, and it is never persisted on the project.
+     */
+    acceptComposeChanges?: boolean;
     /** Internal deployment intent used by scoped incoming webhooks. Persisted
      * on this deployment's worker snapshot; deliberately not exposed by the
      * HTTP deployment controller. */
@@ -2981,6 +3002,7 @@ async function triggerDeploymentNow(ctx: RequestContext, data: DeploymentTrigger
     const sourceRef = requestedCommitSha ?? branch;
     let sourceInfo: SourceEnvInfo | undefined = await reconcileComposeSource(ctx, project, sourceRef, {
       changedPaths: data.changedPaths,
+      acceptComposeChanges: data.acceptComposeChanges,
       interpolationEnv: decryptEnvMap(encryptedEnvVars ?? {}),
     });
     sourceInfo ??= await resolveLifecycleSourceEnv(ctx, project, sourceRef);

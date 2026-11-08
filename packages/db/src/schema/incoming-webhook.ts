@@ -31,6 +31,13 @@ export type IncomingWebhookActionConfig = {
   serviceIds?: string[];
   /** job: the `job.key` to run. */
   jobKey?: string;
+  /**
+   * deploy: approve the current Compose source when this hook triggers a
+   * deploy, as the Configure screen does when it sends a compose revision.
+   * Opt-in per hook, so a bare hook URL cannot silently auto-approve unless
+   * the owner enabled it. Omitted/false keeps the review gate blocking.
+   */
+  acceptComposeChanges?: boolean;
 };
 
 /** How an incoming call authenticates. */

@@ -25,6 +25,12 @@ export const CreateDeploymentSchema = Type.Object({
   refresh: Type.Optional(
     Type.Boolean({ description: "Re-apply environment without pulling source or rebuilding." }),
   ),
+  acceptComposeChanges: Type.Optional(
+    Type.Boolean({
+      description:
+        "Approve the current Compose source for this deploy, as the Configure screen does when it sends a compose revision. Only for callers that cannot preview (CLI, incoming webhook); the review gate is still enforced.",
+    }),
+  ),
 });
 
 export type CreateDeploymentInput = Static<typeof CreateDeploymentSchema>;
