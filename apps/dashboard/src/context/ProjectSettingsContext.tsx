@@ -86,6 +86,12 @@ interface BasicProjectData {
   buildImage?: string;
   hasMultipleServices?: boolean;
   serviceCount?: number;
+  /**
+   * Deployment shape from getInfo, derived from the service rows
+   * (kind-discriminated): "services" for a Compose stack, "monorepo" when any
+   * service is a monorepo app, "app" otherwise.
+   */
+  projectType?: "app" | "services" | "monorepo";
   activeDeploymentId?: string | null;
   /** Operator switch, derived server-side from `disabled_at` (enrichProject). */
   enabled?: boolean;

@@ -268,6 +268,8 @@
     "modeStandalone": "Автономный",
     "modeServer": "Сервер",
     "modeWorker": "Воркер",
+    "modeComposeOne": "Compose-стек · 1 сервис",
+    "modeComposeOther": "Compose-стек · {count} сервисов",
     "infrastructure": "Инфраструктура",
     "platform": "Платформа",
     "mode": "Режим",

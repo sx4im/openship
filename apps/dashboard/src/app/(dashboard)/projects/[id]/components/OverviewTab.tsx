@@ -67,8 +67,18 @@ export const OverviewTab = () => {
     workloadType: projectData.workloadType ?? projectData.options?.workloadType,
     hasServer: projectData.hasServer ?? projectData.options?.hasServer,
   });
-  const modeLabel =
-    workload === "static"
+  // A Compose stack has no single workload: its services span databases, APIs
+  // and workers, so the workload resolver cannot describe it — without this
+  // gate it falls through to "Static Site" (#1670).
+  const isComposeStack = projectData.projectType === "services";
+  const modeLabel = isComposeStack
+    ? interpolate(
+        serviceCount === 1
+          ? t.projects.overview.modeComposeOne
+          : t.projects.overview.modeComposeOther,
+        { count: String(serviceCount) },
+      )
+    : workload === "static"
       ? t.projects.overview.modeStatic
       : workload === "worker"
         ? t.projects.overview.modeWorker

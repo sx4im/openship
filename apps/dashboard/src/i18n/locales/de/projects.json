@@ -209,6 +209,8 @@
     "modeStandalone": "Standalone",
     "modeServer": "Server",
     "modeWorker": "Worker",
+    "modeComposeOne": "Compose-Stack · 1 Dienst",
+    "modeComposeOther": "Compose-Stack · {count} Dienste",
     "infrastructure": "Infrastruktur",
     "platform": "Plattform",
     "mode": "Modus",
