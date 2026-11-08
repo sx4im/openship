@@ -935,6 +935,21 @@ export function useDeploymentConfig() {
 
   // ── Prepare from GitHub repo ───────────────────────────────────────────────
 
+  // A failed first scan builds no config at all, so the wizard has no source
+  // to steer: the branch selector and compose-path field rescan from
+  // config.owner/repo/branch and refuse an empty config ("no git source").
+  // Record the attempted source on failure so those controls can offer
+  // another branch or file instead of forcing the user to leave and retry
+  // the same scan (#1666).
+  const seedFailedSource = useCallback((owner: string, repo: string, branch?: string) => {
+    setConfig((prev) => ({
+      ...prev,
+      owner,
+      repo,
+      branch: branch ?? prev.branch,
+    }));
+  }, []);
+
   const initializeFromRepo = useCallback(
     async (
       owner: string,
@@ -955,6 +970,13 @@ export function useDeploymentConfig() {
       errorCode?: string;
       buildInProgress?: boolean;
     }> => {
+      // The attempted source, resolved before the scan so a failure can still
+      // seed it for steering (#1666). `let` because the saved project (loaded
+      // inside the try) can override the URL identity, and the catch below
+      // cannot see anything declared inside the try block.
+      let sourceOwner = owner;
+      let sourceRepo = repo;
+      let requestedBranch = context?.branch?.trim() || undefined;
       try {
         let project: PersistedProject = null;
         let projectEnvState: ProjectEnvEditState | null = null;
@@ -973,10 +995,10 @@ export function useDeploymentConfig() {
           }
         }
 
-        const sourceOwner = project?.gitOwner || owner;
-        const sourceRepo = project?.gitRepo || repo;
+        sourceOwner = project?.gitOwner || owner;
+        sourceRepo = project?.gitRepo || repo;
         const projectBranch = typeof project?.gitBranch === "string" ? project.gitBranch : "";
-        const requestedBranch = context?.branch?.trim() || projectBranch.trim() || undefined;
+        requestedBranch = context?.branch?.trim() || projectBranch.trim() || undefined;
         const changesSavedBranch = !!project && requestedBranch !== projectBranch;
 
         const preparedSource: PrepareProjectSource = {
@@ -991,6 +1013,8 @@ export function useDeploymentConfig() {
         const response = await deployApi.prepare({ ...preparedSource, projectId: context?.projectId, includeEnv: true });
 
         if (response?.error) {
+          // Keep the attempted source so the wizard can steer it (#1666).
+          seedFailedSource(sourceOwner, sourceRepo, requestedBranch);
           return { success: false, error: response.error, errorType: "api_error" };
         }
 
@@ -1067,6 +1091,8 @@ export function useDeploymentConfig() {
         return { success: true };
       } catch (err) {
         const errorMessage = getApiErrorMessage(err, "Failed to fetch repository data");
+        // Keep the attempted source so the wizard can steer it (#1666).
+        seedFailedSource(sourceOwner, sourceRepo, requestedBranch);
         return {
           success: false,
           error: errorMessage,
@@ -1075,7 +1101,7 @@ export function useDeploymentConfig() {
         };
       }
     },
-    [buildPreparedConfig, config.serverId],
+    [buildPreparedConfig, config.serverId, seedFailedSource],
   );
 
   // A branch is a different source tree. Commit its name and detection together,

@@ -6,7 +6,7 @@ import { hasComposeGpuRequest } from "@repo/core";
 import { DeployActions } from "@/components/actions/DeployActions";
 import { DeployGitHubChecks } from "@/components/import-project/DeployGitHubChecks";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import ProjectSettings from "@/components/import-project/ProjectSettings";
 import BuildSettings from "@/components/import-project/BuildSettings";
@@ -14,6 +14,7 @@ import DockerSettings from "@/components/import-project/DockerSettings";
 import ComposeServices from "@/components/import-project/ComposeServices";
 import { ComposePathField } from "@/components/import-project/ComposePathField";
 import { ConfigDiagnostics } from "@/components/import-project/ConfigDiagnostics";
+import { RepositoryBranchSelect } from "@/components/github/RepositoryBranchSelect";
 import EnvironmentVariables from "@/components/import-project/EnvironmentVariables";
 import MonorepoApps from "@/components/import-project/MonorepoApps";
 import RoutingSection from "@/components/import-project/RoutingSection";
@@ -72,7 +73,7 @@ const ProjectName: React.FC = () => {
 const DeployRepository: React.FC = () => {
     const params = useParams();
     const slug = params.slug as string;
-    const { config, state, isRescanning, initializeFromRepo, initializeFromLocal, initializeFromUpload, initializeFromProject, updateConfig } = useDeployment();
+    const { config, state, isRescanning, initializeFromRepo, initializeFromLocal, initializeFromUpload, initializeFromProject, rescanWithBranch, updateConfig } = useDeployment();
     const { selfHosted } = usePlatform();
     const { t } = useI18n();
     const searchParams = useSearchParams();
@@ -117,8 +118,32 @@ const DeployRepository: React.FC = () => {
     const [error, setError] = useState<DeployError | null>(null);
     const [selectReadServer, setSelectReadServer] = useState(false);
     const [scanAttempt, setScanAttempt] = useState(0);
+    const [branchError, setBranchError] = useState<string | null>(null);
     const hasInitialized = useRef<boolean>(false);
     const { toast } = useToast();
+
+    // Re-run the first scan with the current source.
+    const retryScan = useCallback(() => {
+        hasInitialized.current = false;
+        setError(null);
+        setLoading(true);
+        setScanAttempt((attempt) => attempt + 1);
+    }, []);
+
+    // A branch change after a failed first scan re-scans the seeded source;
+    // on success the page error clears and the wizard appears (#1666).
+    const handleBranchChange = useCallback(
+        async (branch: string) => {
+            setBranchError(null);
+            const result = await rescanWithBranch(branch);
+            if (result.success) {
+                setError(null);
+            } else if (result.error) {
+                setBranchError(result.error);
+            }
+        },
+        [rescanWithBranch],
+    );
 
     // A saved project pins the deploy target only if it actually HAS one, so the gate is
     // the hydration RESULT, not the fact that a project is being loaded:
@@ -288,17 +313,51 @@ const DeployRepository: React.FC = () => {
                                 <ServerSelectorView selection={serverSelection} compact />
                                 <Button
                                     disabled={!serverSelection.ready || !config.serverId}
-                                    onClick={() => {
-                                        hasInitialized.current = false;
-                                        setError(null);
-                                        setLoading(true);
-                                        setScanAttempt(attempt => attempt + 1);
-                                    }}
+                                    onClick={retryScan}
                                 >
                                     {t.billing.plansRoute.tryAgain}
                                 </Button>
                             </div>
                         </WarningCallout>
+                    </div>
+                </PageContainer>
+            );
+        }
+        // The first scan failed, but the attempted source was seeded into the
+        // config — show the error inline with the steering controls (branch,
+        // compose path, diagnostics) instead of a dead-end full-page error,
+        // so the user can fix the branch or compose file and rescan (#1666).
+        // An invalid URL has no source to steer, and non-repo sources keep
+        // the existing full-page error.
+        if (error.type !== 'invalid_url' && decodedSource?.kind === "repo") {
+            return (
+                <PageContainer>
+                    <div className="mx-auto max-w-xl pt-12 space-y-5">
+                        <WarningCallout title={error.message} description={error.details}>
+                            <div className="mt-4">
+                                <Button onClick={retryScan}>
+                                    {t.billing.plansRoute.tryAgain}
+                                </Button>
+                            </div>
+                        </WarningCallout>
+                        <div className="rounded-2xl border border-border bg-card p-5">
+                            <RepositoryBranchSelect
+                                owner={config.owner}
+                                repo={config.repo}
+                                serverId={config.serverId}
+                                projectId={config.projectId}
+                                value={config.branch}
+                                onChange={(val) => void handleBranchChange(val)}
+                                disabled={isRescanning || state.isDeploying}
+                            />
+                            {branchError && (
+                                <p role="alert" className="mt-2 text-sm text-danger break-words">
+                                    {branchError}
+                                </p>
+                            )}
+                        </div>
+                        <ComposePathField onSuccess={() => setError(null)} />
+                        <ConfigDiagnostics />
                     </div>
                 </PageContainer>
             );

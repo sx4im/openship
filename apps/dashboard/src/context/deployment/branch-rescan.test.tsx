@@ -268,6 +268,74 @@ describe("deploy branch detection", () => {
       expect.objectContaining({ serverId: "chosen-server" }),
     );
   });
+  it("seeds the repo identity when the first scan fails so the wizard can steer it", async () => {
+    await act(async () => current.updateConfig({ projectId: undefined }));
+    api.prepare.mockResolvedValueOnce({
+      error: 'Compose path "deploy/x.yml" was not found in the repository',
+    });
+    let result: Awaited<ReturnType<DeploymentContextType["initializeFromRepo"]>>;
+    await act(async () => {
+      result = await current.initializeFromRepo("example", "fresh", undefined, {
+        branch: "feature",
+      });
+    });
+    expect(result!).toMatchObject({ success: false });
+    // The scan failed before any config was built, so the wizard would have
+    // nothing to rescan from — the failed source must still be recorded.
+    expect(current.config).toMatchObject({ owner: "example", repo: "fresh", branch: "feature" });
+
+    // Pointing at a different compose file re-scans the seeded source. The scan
+    // response must describe the same repo — the mock's default repo is "demo",
+    // and a response naming another repo would overwrite the seeded identity.
+    api.prepare.mockResolvedValueOnce(
+      scan("feature", {
+        repository: {
+          name: "fresh",
+          full_name: "example/fresh",
+          owner: { login: "example" },
+          private: false,
+          default_branch: "main",
+          selected_branch: "feature",
+          branches: [{ name: "main" }, { name: "feature" }],
+        },
+      }),
+    );
+    await act(async () => {
+      expect(
+        await current.rescanWithComposePath("deploy/docker-compose.yml"),
+      ).toMatchObject({ success: true });
+    });
+    expect(api.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        owner: "example",
+        repo: "fresh",
+        branch: "feature",
+        composePath: "deploy/docker-compose.yml",
+      }),
+    );
+
+    // Switching branch re-scans the seeded source too.
+    api.prepare.mockResolvedValueOnce(scan("other-branch"));
+    await act(async () => {
+      expect(await current.rescanWithBranch("other-branch")).toMatchObject({ success: true });
+    });
+    expect(api.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({ owner: "example", repo: "fresh", branch: "other-branch" }),
+    );
+    expect(current.config.branch).toBe("other-branch");
+  });
+  it("seeds the repo identity when the first scan throws", async () => {
+    await act(async () => current.updateConfig({ projectId: undefined }));
+    api.prepare.mockRejectedValueOnce(new Error("Network down"));
+    let result: Awaited<ReturnType<DeploymentContextType["initializeFromRepo"]>>;
+    await act(async () => {
+      result = await current.initializeFromRepo("example", "fresh", undefined, {
+        branch: "feature",
+      });
+    });
+    expect(result!).toMatchObject({ success: false, error: "Network down" });
+    expect(current.config).toMatchObject({ owner: "example", repo: "fresh", branch: "feature" });
+  });
   it("saves only edited service overrides in their own environment scope", async () => {
     const baseline = [
       {

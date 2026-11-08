@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
  * applying a path flips the wizard to the compose view, so a control living
  * inside the app/docker section would vanish the moment it worked.
  */
-export const ComposePathField: React.FC = () => {
+export const ComposePathField: React.FC<{ onSuccess?: () => void }> = ({ onSuccess }) => {
   const deployment = useOptionalDeployment();
   const { t } = useI18n();
   const cp = t.importProject.buildSettings.composePath;
@@ -61,7 +61,12 @@ export const ComposePathField: React.FC = () => {
     setPending(true);
     setError(null);
     const result = await rescan(trimmed);
-    if (!result.success) setError(result.error ?? cp.scanFailed);
+    if (result.success) {
+      // A page showing an inline scan error can clear it now (#1666).
+      onSuccess?.();
+    } else {
+      setError(result.error ?? cp.scanFailed);
+    }
     setPending(false);
   };
 
