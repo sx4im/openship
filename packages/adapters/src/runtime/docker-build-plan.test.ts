@@ -394,15 +394,17 @@ describe("generateDockerfile — a project env var named PATH cannot unset the b
     API_URL: "https://api.example.com",
     // Declared AFTER an ordinary var on purpose. Object.entries keeps insertion
     // order, so without the exclusion this lands mid-list as
-    // `export API_URL='…' PATH='…' NO_COLOR='1'` — which a "the prefix does not
+    // `export API_URL="$API_URL" PATH="$PATH" NO_COLOR='1'` — which a "the prefix does not
     // START with export PATH" check would sail straight past.
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/bin",
   };
 
   /** What every RUN line's export segment must be, for all four recipes: the
-   *  ordinary var, the NO_COLOR default, and nothing else. One equality covers
-   *  PATH/FORCE_COLOR/TERM being dropped AND the ordinary var surviving. */
-  const EXPECTED_EXPORT = "export API_URL='https://api.example.com' NO_COLOR='1'";
+   *  ordinary var (by NAME only — its value reaches the build as a build arg,
+   *  never as an inline literal; openship#1663), the NO_COLOR default, and
+   *  nothing else. One equality covers PATH/FORCE_COLOR/TERM being dropped
+   *  AND the ordinary var surviving. */
+  const EXPECTED_EXPORT = 'export API_URL="$API_URL" NO_COLOR=\'1\'';
 
   it("exports the project's other vars but never its PATH (JS recipe)", () => {
     const df = generateDockerfile(nextApp({ envVars: HOSTILE_ENV }));
@@ -489,7 +491,7 @@ describe("generateDockerfile — a project env var named PATH cannot unset the b
     const exports = inlineExports(df);
     expect(exports.length).toBeGreaterThan(0);
     for (const segment of exports) {
-      expect(segment).toBe("export PATH_PREFIX='/base' NEXT_PUBLIC_PATH='/p' NO_COLOR='1'");
+      expect(segment).toBe('export PATH_PREFIX="$PATH_PREFIX" NEXT_PUBLIC_PATH="$NEXT_PUBLIC_PATH" NO_COLOR=\'1\'');
     }
   });
 });
@@ -544,5 +546,116 @@ describe("stack-selected recipes and custom runtime bases", () => {
     expect(() =>
       generateDockerfile(config({ runtimeImageOverride: true, isStatic: true })),
     ).toThrow(/static sites/);
+  });
+});
+
+// BuildKit echoes every RUN instruction into the streamed build log, so a
+// generated Dockerfile that inlines `export KEY='value'` prints every private
+// variable — DB keys, API keys, storage credentials, webhook secrets,
+// service-account JSON — into persisted deployment logs (openship#1663).
+// The values now reach the build as Docker build args instead: the Dockerfile
+// declares each var as a valueless `ARG` and the RUN lines reference it by
+// name only. All values below are fake placeholders, never real secrets.
+describe("generateDockerfile — build env values never appear in the Dockerfile (#1663)", () => {
+  const SECRET_ENV: Record<string, string> = {
+    EXAMPLE_API_KEY: "sk-test-fake-1663-api-key",
+    EXAMPLE_DATABASE_SERVICE_KEY: "fake-db-service-key-1663",
+    EXAMPLE_SERVICE_ACCOUNT_JSON: '{"type":"service_account","project_id":"fake-1663"}',
+  };
+
+  const nextApp = (over: Partial<BuildConfig> = {}) =>
+    config({
+      buildImage: "oven/bun:latest",
+      runtimeImage: "oven/bun:latest",
+      packageManager: "bun",
+      installCommand: "bun install",
+      buildCommand: "next build",
+      startCommand: "next start",
+      stack: "nextjs",
+      ...over,
+    });
+
+  const rubyApp = (over: Partial<BuildConfig> = {}) =>
+    config({
+      stack: "rails",
+      packageManager: "bundler",
+      runtimeImage: "custom/rails:latest",
+      buildImage: "ruby:3.3-slim",
+      runtimeImageOverride: true,
+      installCommand: "bundle install",
+      buildCommand: "bundle exec rails assets:precompile",
+      ...over,
+    });
+
+  /** No fake secret value may appear anywhere in the generated Dockerfile. */
+  function expectNoSecrets(df: string): void {
+    for (const value of Object.values(SECRET_ENV)) {
+      expect(df).not.toContain(value);
+    }
+    // The JSON value's distinctive fragment, in case quoting split it.
+    expect(df).not.toContain("fake-1663");
+  }
+
+  /** Every var is declared as a valueless ARG in each stage, before the RUN
+   *  that references it — otherwise the `export KEY="$KEY"` below would
+   *  silently expand to empty and the build would lose the variable.
+   *  (The RUN line carries ONE export statement for all vars, so a later
+   *  key appears as `KEY="$KEY"` without its own `export` prefix.) */
+  function expectArgWiring(df: string): void {
+    for (const key of Object.keys(SECRET_ENV)) {
+      expect(df).toContain(`ARG ${key}`);
+      expect(df).not.toContain(`ARG ${key}=`);
+      expect(df).toContain(`${key}="$${key}"`);
+      const argIdx = df.indexOf(`ARG ${key}`);
+      const runIdx = df.indexOf(`${key}="$${key}"`);
+      expect(df.indexOf("FROM ")).toBeLessThan(argIdx);
+      expect(argIdx).toBeLessThan(runIdx);
+    }
+  }
+
+  it("keeps secrets out of the JS recipe and wires the ARGs", () => {
+    const df = generateDockerfile(nextApp({ envVars: SECRET_ENV }));
+    expectNoSecrets(df);
+    expectArgWiring(df);
+  });
+
+  it("keeps secrets out of the static recipe and wires the ARGs", () => {
+    const df = generateDockerfile(
+      config({
+        isStatic: true,
+        packageManager: "npm",
+        installCommand: "npm ci",
+        buildCommand: "vite build",
+        outputDirectory: "dist",
+        stack: "vite",
+        envVars: SECRET_ENV,
+      }),
+    );
+    expectNoSecrets(df);
+    expectArgWiring(df);
+  });
+
+  it("keeps secrets out of the PHP recipe and wires the ARGs", () => {
+    const df = generateDockerfile(phpConfig({ buildCommand: "npm run build", envVars: SECRET_ENV }));
+    expectNoSecrets(df);
+    expectArgWiring(df);
+  });
+
+  it("keeps secrets out of the Ruby recipe and wires the ARGs", () => {
+    const df = generateDockerfile(rubyApp({ envVars: SECRET_ENV }));
+    expectNoSecrets(df);
+    expectArgWiring(df);
+  });
+
+  it("keeps secrets out when the build cache adds its own ARG lines", () => {
+    const df = generateDockerfile(nextApp({ envVars: SECRET_ENV, buildCache: true }));
+    expectNoSecrets(df);
+    expectArgWiring(df);
+    expect(df).toContain("ARG TARGETPLATFORM");
+  });
+
+  it("declares no ARGs when there are no env vars", () => {
+    const df = generateDockerfile(nextApp({ envVars: {} }));
+    expect(df).not.toMatch(/^ARG (?!TARGETPLATFORM)[A-Z_]+$/m);
   });
 });

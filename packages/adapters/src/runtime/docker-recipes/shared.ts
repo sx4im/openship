@@ -1,7 +1,6 @@
 import type { BuildConfig } from "../../types";
 import { managedRuntimeImage, packageManagerEnsureCommand, nodeBinDirs } from "@repo/core";
 
-import { sq } from "../build-pipeline";
 import { cachedRunPrefix } from "./cache";
 import { normalizeDockerRootDirectory } from "../docker-paths";
 
@@ -43,11 +42,42 @@ export function builderSourceDir(rootDirectory?: string): string {
   return normalized ? `/workspace/${normalized}` : "/workspace";
 }
 
+/**
+ * The env keys that reach a build step at all: valid shell identifiers,
+ * minus the ones that must never be restated inline (see
+ * INLINE_BUILD_ENV_EXCLUDES). Shared by the ARG declarations and the
+ * export prefix so the two can never drift apart — a key exported
+ * without a matching ARG would silently expand to empty mid-build.
+ */
+export function inlineBuildEnvKeys(envVars: BuildConfig["envVars"]): string[] {
+  return Object.keys(envVars)
+    .filter((key) => !INLINE_BUILD_ENV_EXCLUDES.has(key))
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+}
+
+/**
+ * One `ARG <KEY>` line per build env key — value deliberately omitted.
+ *
+ * The values arrive as Docker build args (resolveDockerBuildArgs passes
+ * every project env var on both the buildx CLI and the dockerode paths),
+ * so the Dockerfile itself never contains a secret: BuildKit echoes each
+ * RUN instruction into the streamed build log, and an inline
+ * `export KEY='value'` there exposed every private variable
+ * (openship#1663). An ARG with no default prints nothing and stores
+ * nothing in the image; the RUN lines below read the value back out of
+ * the build environment instead.
+ */
+export function buildEnvArgLines(envVars: BuildConfig["envVars"]): string[] {
+  return inlineBuildEnvKeys(envVars).map((key) => `ARG ${key}`);
+}
+
 export function buildEnvPrefix(envVars: BuildConfig["envVars"]): string {
-  const assignments = Object.entries(envVars)
-    .filter(([key]) => !INLINE_BUILD_ENV_EXCLUDES.has(key))
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `${key}=${sq(value)}`);
+  // Names only, never values: the value comes from the matching ARG
+  // declaration (see buildEnvArgLines), which the build args supply.
+  // An inline literal here would be echoed by BuildKit into the build
+  // log (openship#1663) — `export KEY="$KEY"` keeps the same shape
+  // (and the same variable names in the log) with nothing to leak.
+  const assignments = inlineBuildEnvKeys(envVars).map((key) => `${key}="$${key}"`);
 
   if (!envVars.NO_COLOR) {
     assignments.push("NO_COLOR='1'");
