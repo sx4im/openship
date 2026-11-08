@@ -1,6 +1,6 @@
 import { assertLocalHostExecutionAllowed } from "@repo/core";
 import { access, lstat, mkdir, chmod, mkdtemp, readlink, rm, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { Mindwire, local, type NativeAuthSource, type TargetHandle } from "mindwire";
@@ -75,6 +75,40 @@ export async function linkMacosKeychain(
   await symlink(target, link);
 }
 
+/**
+ * #1669 — a GUI app launched from the Dock inherits launchd's minimal PATH
+ * (/usr/bin:/bin:/usr/sbin:/sbin), so agent CLIs installed by Homebrew, npm,
+ * Bun or the vendor installers are invisible to the probe even though they
+ * run fine in a terminal. On macOS, append the well-known install
+ * directories to the inherited PATH so detection matches a terminal.
+ * No-op on other platforms; never duplicates an entry that is already there.
+ */
+export function resolveAgentSearchPath(
+  envPath: string | undefined,
+  home: string = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const base = envPath ?? "/usr/local/bin:/usr/bin:/bin";
+  if (platform !== "darwin") return base;
+  const extra = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    join(home, ".local", "bin"),
+    join(home, ".bun", "bin"),
+    join(home, ".npm-global", "bin"),
+    join(home, ".claude", "local"),
+  ];
+  const parts = base.split(delimiter).filter(Boolean);
+  const seen = new Set(parts);
+  for (const directory of extra) {
+    if (!seen.has(directory)) {
+      seen.add(directory);
+      parts.push(directory);
+    }
+  }
+  return parts.join(delimiter);
+}
+
 export async function createAssistantClient(
   directory: string,
   userId: string,
@@ -104,7 +138,8 @@ export async function createAssistantClient(
   }
   // #1614: let Claude Code reach the macOS keychain from the isolated home.
   await linkMacosKeychain(join(root, "home"));
-  const searchPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  // #1669: repair the minimal GUI PATH on macOS so installed agent CLIs are found.
+  const searchPath = resolveAgentSearchPath(process.env.PATH);
   // macOS Unix sockets have a short path limit. Mindwire's local Git broker also starts at boot.
   const temporary = await mkdtemp("/tmp/openship-mw-");
   const env = {
