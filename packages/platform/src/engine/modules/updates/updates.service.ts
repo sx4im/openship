@@ -481,6 +481,7 @@ async function driftItem(
     appTemplateId: project.appTemplateId ?? null,
     kind: status.mode,
     behind: status.behind,
+    unknown: status.unknown,
     latestInProgress: status.latestInProgress,
     inProgressDeploymentId: status.inProgressDeploymentId,
     currentLabel: view.currentLabel,
@@ -533,7 +534,9 @@ export async function listOrganizationUpdates(
 
   // Deterministic despite the concurrency: behind first, then by name.
   items.sort((a, b) => Number(b.behind) - Number(a.behind) || a.name.localeCompare(b.name));
-  return opts?.behindOnly ? items.filter((i) => i.behind || i.latestInProgress) : items;
+  // An unknown digest is not "up to date" (#1702): a project whose drift can't
+  // be verified stays in the behind-only feed so the operator sees it.
+  return opts?.behindOnly ? items.filter((i) => i.behind || i.unknown || i.latestInProgress) : items;
 }
 
 /**

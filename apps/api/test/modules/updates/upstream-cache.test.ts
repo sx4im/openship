@@ -182,6 +182,34 @@ describe("a project with no cached row", () => {
     });
   });
 
+  it("keeps an image project whose digest is unverifiable in the behind-only feed (#1702)", async () => {
+    // The feed used to drop it: behind:false with nothing to say it was unknown,
+    // so `?behind=1` answered [] for a project whose tag had moved on.
+    const p = project({ gitOwner: null, gitRepo: null });
+    setup([p], []);
+    serviceRepo.listByProject.mockResolvedValue([
+      { id: "svc_1", name: "web", image: "nginx:alpine", build: null, enabled: true },
+    ]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "nginx:alpine", imageDigest: null },
+    ]);
+    resolveUpstreamDrift.mockResolvedValue({
+      supported: true,
+      mode: "image",
+      digestByRef: { "nginx:alpine": "sha256:new" },
+    });
+
+    const items = await listOrganizationUpdates(ctx, { behindOnly: true });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      projectId: "proj_1",
+      kind: "image",
+      behind: false,
+      unknown: true,
+    });
+  });
+
   it("writes what it polled back, so the next surface reads it for free", async () => {
     const p = project();
     setup([p], []);

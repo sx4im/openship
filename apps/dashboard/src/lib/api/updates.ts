@@ -19,6 +19,8 @@ export interface UpdateStatusItem {
   appTemplateId: string | null;
   kind: "commit" | "release" | "image";
   behind: boolean;
+  /** True when the drift verdict is unknown (e.g. a deployed image digest is missing) — not up to date, not behind. */
+  unknown: boolean;
   latestInProgress: boolean;
   inProgressDeploymentId?: string | null;
   currentLabel: string | null;

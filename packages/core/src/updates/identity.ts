@@ -79,16 +79,48 @@ export function compareCommitSha(
   return short.length >= MIN_ABBREV ? "same" : "unknown";
 }
 
+/** Verdict of comparing two image identities. `unknown` = not comparable. */
+export type ImageDrift = "behind" | "current" | "unknown";
+
+/** A ref that pins its own content (`repo@sha256:<64 hex>`) — no digest lookup needed. */
+function isDigestPinnedRef(ref: string): boolean {
+  return /@sha256:[0-9a-f]{64}$/i.test(ref);
+}
+
+/**
+ * Tri-state image drift — the boolean `isBehind` cannot say "we don't know",
+ * and that gap is how a service whose deployed digest is missing got reported
+ * as up to date: no digest on either side is no evidence, not current.
+ *   - both digests known → behind iff they differ (either digest form)
+ *   - a changed ref → behind even without digests (the running container is
+ *     on a different ref than the service now specifies)
+ *   - equal digest-pinned refs → current (the ref itself names the content)
+ *   - otherwise → unknown (a missing digest on either side)
+ */
+export function compareImageDrift(
+  current: UpdatableIdentity,
+  latest: UpdatableIdentity,
+): ImageDrift {
+  if (current.kind !== "image" || latest.kind !== "image") return "unknown";
+  const a = digestSha(current.digest);
+  const b = digestSha(latest.digest);
+  if (a && b) return a !== b ? "behind" : "current";
+  if (current.ref !== latest.ref) return "behind";
+  if (isDigestPinnedRef(current.ref)) return "current";
+  return "unknown";
+}
+
 /**
  * Is `current` behind `latest` (i.e. an update is available)?
  *
  *   - release → semver comparison (`compareSemver`), the single source of truth.
  *   - commit  → a PROVABLE sha difference (`compareCommitSha`); an abbreviated or
  *               non-sha ref on either side is no evidence, not new commits.
- *   - image   → digest inequality when BOTH digests are known; if either digest
- *               is unknown, fall back to ref/tag inequality. Unknown-vs-unknown
- *               (no digest either side) → NOT behind (we can't claim an update
- *               without evidence — fail-soft, never a false "update available").
+ *   - image   → the boolean projection of `compareImageDrift`: behind only on
+ *               provable drift. Unknown-vs-unknown (no digest either side) →
+ *               NOT behind (we can't claim an update without evidence —
+ *               fail-soft, never a false "update available"); the unknown state
+ *               itself is what callers surface, via `compareImageDrift`.
  *
  * Mismatched kinds → false (never claim drift we can't reason about).
  */
@@ -104,17 +136,7 @@ export function isBehind(current: UpdatableIdentity, latest: UpdatableIdentity):
   }
 
   if (current.kind === "image" && latest.kind === "image") {
-    // Compare the content digest only (the `sha256:…` part). The two sides come
-    // from different sources with different prefixes — a stored RepoDigest
-    // (`repo@sha256:…`) vs a registry manifest digest (`sha256:…`) — so full-
-    // string comparison would falsely differ.
-    const a = digestSha(current.digest);
-    const b = digestSha(latest.digest);
-    if (a && b) return a !== b;
-    // Missing a digest on either side: only claim behind if the resolvable
-    // reference actually differs; otherwise we have no evidence → not behind.
-    if (current.ref && latest.ref && current.ref !== latest.ref) return true;
-    return false;
+    return compareImageDrift(current, latest) === "behind";
   }
 
   return false;

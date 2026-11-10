@@ -477,3 +477,111 @@ describe("image drift — digests keyed by the ref they were polled for", () => 
     expect(status).toEqual({ supported: false });
   });
 });
+
+describe("image drift — an unknown digest is unknown, not current (#1702)", () => {
+  const imageProject = () => gitProject({ gitOwner: null, gitRepo: null });
+  const svc = (over: Record<string, unknown> = {}) => ({
+    id: "svc_1",
+    name: "web",
+    image: "nginx:alpine",
+    build: null,
+    enabled: true,
+    ...over,
+  });
+
+  it("reports a service whose deployed row lost its digest as unknown", async () => {
+    // The reported case: the sibling's active row has image_digest NULL (carried
+    // over by later deployments without recreating it), the tag is unchanged,
+    // the registry digest is known — and the feed called the service up to date.
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "nginx:alpine", imageDigest: null },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "nginx:alpine": "sha256:new" },
+    });
+
+    expect(status).toMatchObject({
+      supported: true,
+      mode: "image",
+      behind: false,
+      unknown: true,
+      services: [
+        expect.objectContaining({
+          serviceId: "svc_1",
+          deployedDigest: null,
+          latestDigest: "sha256:new",
+          behind: false,
+          unknown: true,
+        }),
+      ],
+    });
+  });
+
+  it("stays current when both digests are known and equal", async () => {
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "nginx:alpine", imageDigest: "sha256:same" },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "nginx:alpine": "sha256:same" },
+    });
+
+    expect(status).toMatchObject({ behind: false, unknown: false });
+  });
+
+  it("reports unknown when the upstream digest could not be resolved", async () => {
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "nginx:alpine", imageDigest: "sha256:old" },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "nginx:alpine": null },
+    });
+
+    expect(status).toMatchObject({ behind: false, unknown: true });
+  });
+
+  it("a digest-pinned ref needs no digest to be current", async () => {
+    // The ref itself names the content, so the comparison was made even with
+    // both digest columns empty — the same rule the runtime image check uses
+    // when it reports such a ref as "pinned" rather than "unknown".
+    const pinned = `my-app@sha256:${"a".repeat(64)}`;
+    serviceRepo.listByProject.mockResolvedValue([svc({ image: pinned })]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: pinned, imageDigest: null },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { [pinned]: null },
+    });
+
+    expect(status).toMatchObject({ behind: false, unknown: false });
+  });
+
+  it("proven drift is behind, not unknown", async () => {
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "nginx:alpine", imageDigest: "sha256:old" },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "nginx:alpine": "sha256:new" },
+    });
+
+    expect(status).toMatchObject({ behind: true, unknown: false });
+  });
+});

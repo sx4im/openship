@@ -31,7 +31,7 @@ import {
   renderReleaseImage,
   validateReleaseRepository,
   validateReleaseVersionUrl,
-  isBehind,
+  compareImageDrift,
   GITHUB_REPO,
   normalizeRollbackWindow,
   normalizeAliasStrict,
@@ -2610,6 +2610,7 @@ export async function evaluateDrift(
       supported: true as const,
       mode: "commit" as const,
       behind,
+      unknown: false,
       latestInProgress,
       inProgressDeploymentId,
       branch: projectBranch(p),
@@ -2630,6 +2631,7 @@ export async function evaluateDrift(
       supported: true as const,
       mode: "release" as const,
       behind,
+      unknown: false,
       latestInProgress,
       inProgressDeploymentId,
       latestVersion: latest,
@@ -2661,20 +2663,26 @@ export async function evaluateDrift(
         ref,
         digest: latestDigest ?? undefined,
       };
+      // One tri-state verdict per service: a digest missing on either side is
+      // "unknown", not evidence of drift and not "up to date" (#1702). A
+      // digest-pinned ref names its own content, so it needs no digest to be
+      // current — that rule lives in compareImageDrift, not here.
+      const drift = compareImageDrift(current, latest);
       return {
         serviceId: svc.id,
         name: svc.name,
         ref,
         deployedDigest: running?.digest ?? null,
         latestDigest,
-        // Fail-soft: a digest we couldn't resolve is not evidence of drift.
-        behind: latestDigest ? isBehind(current, latest) : false,
+        behind: drift === "behind",
+        unknown: drift === "unknown",
       };
     });
     return {
       supported: true as const,
       mode: "image" as const,
       behind: services.some((s) => s.behind),
+      unknown: services.some((s) => s.unknown),
       latestInProgress: active?.trigger === "update",
       inProgressDeploymentId,
       services,

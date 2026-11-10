@@ -125,6 +125,7 @@ export const ProjectUpdateSchema = Type.Object({
   appTemplateId: nullableString,
   kind: Type.Union([Type.Literal("commit"), Type.Literal("release"), Type.Literal("image")]),
   behind: Type.Boolean(),
+  unknown: Type.Boolean(),
   latestInProgress: Type.Boolean(),
   inProgressDeploymentId: Type.Optional(nullableString),
   currentLabel: nullableString,

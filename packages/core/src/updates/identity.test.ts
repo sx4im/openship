@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   compareCommitSha,
+  compareImageDrift,
   digestSha,
   identityLabel,
   isBehind,
@@ -131,5 +132,57 @@ describe("identityLabel", () => {
     expect(identityLabel({ kind: "commit", sha: "abcdef1234" })).toBe("abcdef1");
     expect(identityLabel({ kind: "release", version: "0.3.1" })).toBe("0.3.1");
     expect(identityLabel({ kind: "image", ref: "n8nio/n8n:latest" })).toBe("n8nio/n8n:latest");
+  });
+});
+
+describe("compareImageDrift", () => {
+  const image = (ref: string, digest?: string): UpdatableIdentity => ({
+    kind: "image",
+    ref,
+    digest,
+  });
+
+  it("proves drift only from digests, in either form", () => {
+    expect(
+      compareImageDrift(
+        image("n8nio/n8n:latest", "n8nio/n8n@sha256:aaaa"),
+        image("n8nio/n8n:latest", "sha256:bbbb"),
+      ),
+    ).toBe("behind");
+    expect(
+      compareImageDrift(
+        image("n8nio/n8n:latest", "n8nio/n8n@sha256:aaaa"),
+        image("n8nio/n8n:latest", "sha256:aaaa"),
+      ),
+    ).toBe("current");
+  });
+
+  it("a missing deployed digest is unknown, not current (#1702)", () => {
+    // The reported case: the active row lost its digest (carried over without
+    // recreating the service), the tag is unchanged, the registry digest is
+    // known — and the feed still called the service up to date.
+    expect(
+      compareImageDrift(image("nginx:alpine"), image("nginx:alpine", "sha256:new")),
+    ).toBe("unknown");
+  });
+
+  it("a missing upstream digest is unknown, not current", () => {
+    expect(
+      compareImageDrift(
+        image("nginx:alpine", "sha256:old"),
+        image("nginx:alpine"),
+      ),
+    ).toBe("unknown");
+    expect(compareImageDrift(image("nginx:alpine"), image("nginx:alpine"))).toBe("unknown");
+  });
+
+  it("a changed reference is drift even without digests", () => {
+    expect(compareImageDrift(image("n8nio/n8n:1.2"), image("n8nio/n8n:1.3"))).toBe("behind");
+    expect(
+      compareImageDrift(
+        image("n8nio/n8n:1.2", "sha256:old"),
+        image("n8nio/n8n:1.3"),
+      ),
+    ).toBe("behind");
   });
 });
