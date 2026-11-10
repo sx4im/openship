@@ -55,6 +55,7 @@ seed() { # <seed-subdir> <target>
 seed postfix /etc/postfix
 seed dovecot /etc/dovecot
 seed amavis-confd /etc/amavis/conf.d
+seed fail2ban-jaild /etc/fail2ban/jail.d
 
 # An older bind-mounted master.cf hides corrected image defaults (#392).
 bash /opt/openship-mail/postfix-filter-tls.sh
@@ -189,7 +190,10 @@ fi
 # 5. fail2ban setup:
 #    a) pre-create the log files the fail2ban jails tail, so a jail never starts
 #       against a missing path (rsyslog populates them as the daemons log).
-mkdir -p /var/log/dovecot /var/log/iredapd /var/log/supervisor
+#       /var/log/clamav is freshclam's log dir: the Dockerfile creates it at
+#       build, but the /var/log bind mount (issue #1701) hides it at runtime.
+#       Ownership is fixed in step 7 — freshclam runs as the clamav user.
+mkdir -p /var/log/dovecot /var/log/iredapd /var/log/supervisor /var/log/clamav
 touch /var/log/mail.log \
       /var/log/dovecot/dovecot.log /var/log/dovecot/imap.log \
       /var/log/dovecot/pop3.log /var/log/dovecot/lda.log /var/log/dovecot/sieve.log \
@@ -233,6 +237,15 @@ seed clamav /var/lib/clamav \
 if getent passwd clamav >/dev/null 2>&1; then
   chown -R clamav:clamav /var/lib/clamav 2>/dev/null \
     || log "WARN: could not chown /var/lib/clamav — freshclam cannot write signatures"
+  # freshclam's update log is /var/log/clamav/freshclam.log (freshclam.conf
+  # UpdateLogFile), and freshclam drops to the `clamav` user (DatabaseOwner).
+  # The /var/log bind mount (issue #1701) hides the clamav-owned dir the
+  # installer created at build, and step 5 only mkdirs it root-owned — on a
+  # fresh host logs dir freshclam could not write its log. Same treatment as
+  # the signatures dir above, on every boot for the same rebuilt-image uid
+  # reason.
+  chown clamav:clamav /var/log/clamav 2>/dev/null \
+    || log "WARN: could not chown /var/log/clamav — freshclam cannot write its update log"
   # clamd's LocalSocket (/var/run/clamav/clamd.ctl — what amavis connects to) and
   # freshclam's pid file live here. Debian creates this from the tmpfiles.d rule its
   # systemd units carry; under supervisord nothing does, and /run starts empty on every

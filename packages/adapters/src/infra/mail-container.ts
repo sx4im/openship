@@ -72,11 +72,39 @@ export const MAIL_CONTAINER_MOUNTS: ReadonlyArray<MailMount> = [
   { host: `${MAIL_HOST_STATE_DIR}/config/postfix`, container: "/etc/postfix", seed: true },
   { host: `${MAIL_HOST_STATE_DIR}/config/dovecot`, container: "/etc/dovecot", seed: true },
   { host: `${MAIL_HOST_STATE_DIR}/config/amavis`, container: "/etc/amavis/conf.d", seed: true },
+  // Operator fail2ban overrides (notably `ignoreip` in a jail.d/*.local file).
+  // Deliberately ONLY jail.d, never all of /etc/fail2ban: the entrypoint rewrites
+  // files across /etc/fail2ban on every boot, and a seed-once mount over the whole
+  // dir would hide later image changes — the same lesson as master.cf (#392).
+  // jail.d is fail2ban's own override mechanism (it wins over jail.local), the
+  // entrypoint already patches its *.local files in place on every boot, and
+  // `seed: true` populates it from the baked jails on first boot. Without this,
+  // an operator's ignoreip survives `docker restart` but is gone after the next
+  // update (issue #1701) — and with bans now actually enforced, a misconfigured
+  // client on a static office address can cut that whole address off from mail.
+  {
+    host: `${MAIL_HOST_STATE_DIR}/config/fail2ban-jail.d`,
+    container: "/etc/fail2ban/jail.d",
+    seed: true,
+  },
   // ClamAV signatures — bind-mounted so a pull doesn't force a multi-hundred-MB
   // freshclam re-download and delay readiness. `seed: true` because that same mount
   // HIDES the database baked into the image: with nothing copying it across, clamd
   // finds an empty database directory and exits (issue #565).
   { host: `${MAIL_HOST_STATE_DIR}/clamav`, container: "/var/lib/clamav", seed: true },
+  // The mail logs. rsyslog routes Postfix, Dovecot, fail2ban, and iRedAPD here, and
+  // supervisord writes its per-program logs under /var/log/supervisor — files, not
+  // stdout, so `docker logs` does not hold them and a recreate wipes the audit
+  // trail of deliveries, auth failures, and bans (issue #1701). Rotation is the
+  // cron program in supervisord.conf, fed by the logrotate configs the installer
+  // already lays down — without it this mount would grow unboundedly on the host.
+  { host: `${MAIL_HOST_STATE_DIR}/logs`, container: "/var/log" },
+  // fail2ban's own SQLite database (Debian's default dbfile — the repo never sets
+  // one, so /var/lib/fail2ban/fail2ban.sqlite3 applies). This is what restores bans
+  // after a restart and keeps ban history; the Postgres mirror in the sidecar only
+  // holds current bans. Without this mount every update logs "New database created"
+  // and starts with an empty ban set (issue #1701).
+  { host: `${MAIL_HOST_STATE_DIR}/fail2ban-db`, container: "/var/lib/fail2ban" },
   { host: "/etc/letsencrypt", container: "/etc/letsencrypt", readonly: true },
 ];
 

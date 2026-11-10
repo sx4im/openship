@@ -35,7 +35,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # daemons have no systemd here); postgresql-client + netcat = the entrypoint's
 # wait-for-sidecar + schema bootstrap; the rest are iRedMail.sh's own deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      supervisor ca-certificates curl gnupg procps rsync cron \
+      supervisor ca-certificates curl gnupg logrotate procps rsync cron \
       netcat-openbsd postgresql-client bsdmainutils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -123,6 +123,17 @@ RUN set -eu; \
     }; \
     echo "openship-mail: all mail daemons present ->$(echo ' postfix dovecot doveadm amavisd clamd freshclam spamd fail2ban iredapd')"
 
+# logrotate is not a supervisord program — the cron program runs it daily — but
+# it is load-bearing all the same: the /var/log bind mount (issue #1701) persists
+# the logs the installer already configures rotation for, and without this binary
+# the cron job is a silent no-op and the mount grows unboundedly on the host.
+# The installer lays down /etc/logrotate.d configs, not the binary, so gate the
+# build on it explicitly rather than trusting a package Recommends.
+RUN command -v logrotate >/dev/null || { \
+      echo "FATAL: logrotate is missing — the persisted mail logs would never rotate (issue #1701)." >&2; \
+      exit 1; \
+    }
+
 # Runtime prerequisites the installer does not leave in place under our stubbed-
 # init build (its late service/DB steps abort — see the `|| true` above):
 #   1. the `iredapd` service account iRedAPD drops privileges to. Without it,
@@ -156,6 +167,7 @@ RUN mkdir -p /opt/openship-mail/seed \
     && cp -a /etc/postfix       /opt/openship-mail/seed/postfix      2>/dev/null || true \
     && cp -a /etc/dovecot       /opt/openship-mail/seed/dovecot      2>/dev/null || true \
     && cp -a /etc/amavis/conf.d /opt/openship-mail/seed/amavis-confd 2>/dev/null || true \
+    && cp -a /etc/fail2ban/jail.d /opt/openship-mail/seed/fail2ban-jaild 2>/dev/null || true \
     && chmod +x /opt/openship-mail/entrypoint.sh /opt/openship-mail/postfix-chroot-etc.sh
 
 # ClamAV signatures, fetched into the SEED dir (issue #565).

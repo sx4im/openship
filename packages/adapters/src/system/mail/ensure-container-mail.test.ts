@@ -42,6 +42,12 @@ describe("buildMailRunCommand", () => {
     expect(cmd).toContain("/var/spool/postfix");
     // The cert store is shared with the edge and mounted read-only.
     expect(cmd).toContain("/etc/letsencrypt:ro,z");
+    // Mail logs, fail2ban's database, and operator jail overrides must survive a
+    // recreate too: `docker rm -f` drops the writable layer, so anything not on a
+    // bind mount is gone at the next engine update (issue #1701).
+    expect(cmd).toContain("/var/log");
+    expect(cmd).toContain("/var/lib/fail2ban");
+    expect(cmd).toContain("/etc/fail2ban/jail.d");
     // Image is the final, shell-quoted token.
     expect(cmd.endsWith("'ghcr.io/x/openship-mail:1'")).toBe(true);
   });
