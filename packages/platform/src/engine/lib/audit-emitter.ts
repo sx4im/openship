@@ -15,8 +15,9 @@ export interface AuditContext {
   userAgent?: string | null;
   /** Where the action came in from. Filled by `auditContextFrom`. */
   source?: AuditSource | null;
-  /** Which client of that surface — `oauth:<clientId>` / `pat:<tokenId>`. Only
-   *  MCP dispatch sets it; see call-source.ts. */
+  /** Which client of that surface — `oauth:<clientId>` / `pat:<tokenId>`.
+   *  MCP dispatch sets it from its signed claim; a PAT-authenticated REST
+   *  call sets it from the credential. See call-source.ts. */
   sourceClientId?: string | null;
 }
 

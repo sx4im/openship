@@ -31,6 +31,7 @@ import { getRequestContext } from "./request-context";
 import type { Permission as Action } from "@repo/db";
 import { repos } from "@repo/db";
 import { audit, auditContextFrom } from "./audit";
+import { isPatPrincipal, resolveCallSource } from "./call-source";
 import {
   canUseGitHubRepo,
   checkSourceTier,
@@ -758,12 +759,24 @@ export function requirePermission(spec: PermissionSpec): MiddlewareHandler {
       throw new Error("An operation-authorized route did not apply its authorized context");
 
     // After handler success: emit an audit event for write/admin/list-
-    // -with-side-effects. Read/list are typically too noisy to log unless
-    // the route opts in (TODO: per-route auditOnRead flag).
+    // -with-side-effects. Reads are typically too noisy to log for a human
+    // clicking around a dashboard — but a script holding a PAT is the MCP
+    // case, not the dashboard case: "what did it look at" is the whole
+    // question, so a successful PAT read gets a row too. An MCP-dispatched
+    // read is excluded: mcp-audit already records it as `mcp.tool_called`,
+    // and this emitter must not double-log it.
     const action = parsed.action;
+    // Short-circuits keep the credential/source reads off the write path.
+    const isPatRead =
+      (action === "read" || action === "list") &&
+      isPatPrincipal(c) &&
+      resolveCallSource(c) !== "mcp";
     // A cloud proxy may finish before reaching a migrated operation. Only skip
     // this emitter when that operation actually recorded this invocation.
-    if ((!spec.auditHandledByOperation || !c.get("operationAuditRecorded")) && (action === "write" || action === "admin")) {
+    if (
+      (!spec.auditHandledByOperation || !c.get("operationAuditRecorded")) &&
+      (action === "write" || action === "admin" || isPatRead)
+    ) {
       const status = c.res.status;
       if (status >= 200 && status < 400) {
         // For CREATE flows, the handler stamps the new id via

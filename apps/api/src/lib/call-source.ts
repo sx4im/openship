@@ -87,13 +87,51 @@ function trustedClaim(c: Context): AuditSource | null {
  * Which client of the surface made this request — `oauth:<clientId>` /
  * `pat:<tokenId>` — or null when nobody trustworthy said.
  *
- * Deliberately NOT derived from the credential as a fallback: the surfaces that
- * have one client per request (a browser, the CLI) gain nothing from the column,
- * and guessing here would put a value in it that no dispatcher stands behind.
+ * A nonce-signed dispatcher claim wins when one exists. Otherwise a PAT
+ * principal falls back to its own credential: one user holds many tokens,
+ * the token is the unit an operator revokes, and the id comes from the
+ * hashed-token lookup in auth.ts — not from anything the caller supplies —
+ * so this is not a guess. The "one client per surface" assumption holds
+ * for a browser or the CLI, but not for a PAT, and without the fallback a
+ * token's REST activity is indistinguishable from every other token its
+ * owner holds.
+ *
+ * OAuth stays dispatcher-signed only: the MCP dispatcher is the one that
+ * knows which assistant of that surface acted, and the outer request
+ * carries no equivalent claim.
  */
 export function resolveCallClientId(c: Context): string | null {
   const claimed = signedPayload(c.req.header(CALL_CLIENT_HEADER));
-  return isAuditClientId(claimed) ? claimed : null;
+  if (isAuditClientId(claimed)) return claimed;
+  return patClientIdFromContext(c);
+}
+
+/** True when the request was authenticated with a personal access token.
+ *  Never throws: pre-auth routes have no context to read. */
+export function isPatPrincipal(c: Context): boolean {
+  try {
+    return getRequestContext(c).principalKind === "pat";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The `pat:<tokenId>` the auth layer minted for this request, or null.
+ * `sessionId` IS the principal id for a bearer request (auth.ts passes
+ * `pat:<id>` / `oauth:<clientId>` as the session id); the shape check is
+ * the backstop so a non-principal session id can never land in the column.
+ */
+function patClientIdFromContext(c: Context): string | null {
+  let ctx: ReturnType<typeof getRequestContext> | null = null;
+  try {
+    ctx = getRequestContext(c);
+  } catch (diagnosticFailure) {
+    observeCaughtError(diagnosticFailure, "api/lib/call-source");
+    return null; // pre-auth, or a route that never builds a ctx
+  }
+  if (ctx.principalKind !== "pat") return null;
+  return isAuditClientId(ctx.sessionId) ? ctx.sessionId : null;
 }
 
 /**

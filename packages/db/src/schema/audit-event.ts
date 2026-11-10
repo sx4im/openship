@@ -69,10 +69,15 @@ export const auditEvent = pgTable(
      * Holds the canonical principal id the auth layer already mints —
      * `oauth:<clientId>` for a consented MCP app, `pat:<tokenId>` for a static
      * token — so it resolves to a name through a table that already exists and
-     * needs no new concept. Null for every other surface.
+     * needs no new concept. Null for a browser session or any other surface
+     * with one client per request.
      *
-     * Carried on the same nonce-signed channel as `source`, for the same reason:
-     * an attributable row a caller could rewrite is worse than no attribution.
+     * For MCP it arrives on the same nonce-signed channel as `source`, for
+     * the same reason: an attributable row a caller could rewrite is worse
+     * than no attribution. For a PAT-authenticated REST call it is filled
+     * from the credential instead (see call-source.ts): the token is the
+     * revocable unit, and the id comes from the hashed-token lookup, not
+     * from anything the caller supplies.
      */
     sourceClientId: text("source_client_id"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
