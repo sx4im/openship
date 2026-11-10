@@ -189,19 +189,37 @@ fi
 # 5. fail2ban setup:
 #    a) pre-create the log files the fail2ban jails tail, so a jail never starts
 #       against a missing path (rsyslog populates them as the daemons log).
-mkdir -p /var/log/dovecot /var/log/iredapd /var/log/supervisor
+mkdir -p /var/log/dovecot /var/log/iredapd /var/log/supervisor /var/log/clamav
 touch /var/log/mail.log \
       /var/log/dovecot/dovecot.log /var/log/dovecot/imap.log \
       /var/log/dovecot/pop3.log /var/log/dovecot/lda.log /var/log/dovecot/sieve.log \
       /var/log/iredapd/iredapd.log
 chown -R iredapd:iredapd /var/log/iredapd 2>/dev/null || true
+#    /var/log is a host bind mount, which hides the /var/log/clamav dir the
+#    Dockerfile created at build — clamd logs there (CLAMD_LOG_DIR), so
+#    recreate it here or clamd starts against a missing log dir.
+chown clamav:clamav /var/log/clamav 2>/dev/null || true
 
-#    b) fix leading commas in jail port lists (e.g. `,,25,587,...` -> `25,587,...`)
+#    b) copy operator fail2ban overrides into jail.d. The overrides live on a
+#       persisted host mount (/var/lib/openship/fail2ban-custom in the
+#       container) because /etc/fail2ban itself must NOT be bind-mounted: the
+#       entrypoint rewrites it on every boot, and a seed-once mount would hide
+#       later image changes (the master.cf trap, #392). Only *.local files —
+#       fail2ban's override convention — and only ever copied IN: an operator
+#       file deleted on the host stops being copied on the next recreate.
+#       Runs before the port fix below so it applies to copied files too.
+for override in /var/lib/openship/fail2ban-custom/*.local; do
+  [ -e "$override" ] || continue
+  cp -a "$override" /etc/fail2ban/jail.d/ \
+    || log "WARN: could not copy fail2ban override $override"
+done
+
+#    c) fix leading commas in jail port lists (e.g. `,,25,587,...` -> `25,587,...`)
 #       because HTTP/HTTPS ports are absent in the container image and cause
 #       nftables syntax errors when generating banning rules.
 sed -i -E 's/port=",,/port="/g' /etc/fail2ban/jail.d/*.local 2>/dev/null || true
 
-#    c) configure the helper's TCP endpoint AND credentials. A .pgpass entry
+#    d) configure the helper's TCP endpoint AND credentials. A .pgpass entry
 #       alone cannot select a host/port. The dedicated files are also used by
 #       cron/manual invocations that do not inherit the container environment.
 python3 /opt/openship-mail/configure-fail2ban-db.py

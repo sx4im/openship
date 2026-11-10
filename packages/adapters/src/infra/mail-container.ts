@@ -77,6 +77,26 @@ export const MAIL_CONTAINER_MOUNTS: ReadonlyArray<MailMount> = [
   // HIDES the database baked into the image: with nothing copying it across, clamd
   // finds an empty database directory and exits (issue #565).
   { host: `${MAIL_HOST_STATE_DIR}/clamav`, container: "/var/lib/clamav", seed: true },
+  // Mail logs. rsyslog writes mail.log, dovecot/*.log and fail2ban.log here,
+  // and supervisord its per-program logs — none of it reaches `docker logs`,
+  // so without this an update wipes the record of deliveries, auth failures
+  // and bans (issue #1701). Pure data (the daemons create their own files),
+  // so no seed; the entrypoint pre-creates the subdirs its daemons need.
+  { host: `${MAIL_HOST_STATE_DIR}/logs`, container: "/var/log" },
+  // fail2ban's own SQLite database: the mirror in the vmail DB holds current
+  // bans only, while this is what restores bans after a restart and keeps ban
+  // history. Pure data, no seed.
+  { host: `${MAIL_HOST_STATE_DIR}/fail2ban`, container: "/var/lib/fail2ban" },
+  // Operator fail2ban customisations (ignoreip et al) as jail.d/*.local
+  // files. A staging dir, NOT a mount over /etc/fail2ban: the entrypoint
+  // rewrites that directory on every boot, and a seed-once mount over it
+  // would hide later image changes (the master.cf trap, #392). The
+  // entrypoint copies *.local from here into jail.d on every boot, so a file
+  // dropped here once survives every update. Unseeded by design.
+  {
+    host: `${MAIL_HOST_STATE_DIR}/config/fail2ban`,
+    container: "/var/lib/openship/fail2ban-custom",
+  },
   { host: "/etc/letsencrypt", container: "/etc/letsencrypt", readonly: true },
 ];
 
