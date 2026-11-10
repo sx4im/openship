@@ -526,6 +526,25 @@ describe("every row carries its own fix", () => {
     ]);
   });
 
+  it("shows an unverifiable update as advisory with no Update button (#1702)", async () => {
+    // A project whose deployed digest is missing is not "behind", but it is
+    // not verified up to date either — the row must say so, and must not
+    // offer an Update that would 400 with "no newer service images".
+    listOrganizationUpdates.mockResolvedValue([update({ behind: false, unverified: true })]);
+
+    const { issues } = await listOrganizationIssues(ctx);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      id: "update:proj-2",
+      kind: "update_available",
+      severity: "advisory",
+      resolveWith: [],
+      details: { unverified: true },
+    });
+    expect(issues[0].message).toContain("couldn't be verified");
+  });
+
   it("ignores an update row that is not actually behind", async () => {
     listOrganizationUpdates.mockResolvedValue([update({ behind: false })]);
 

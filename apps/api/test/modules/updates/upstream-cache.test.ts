@@ -297,6 +297,41 @@ describe("mixed local and registry image cohorts", () => {
     expect(item.currentLabel).not.toBe(item.latestLabel);
   });
 
+  it("keeps a project with an unverifiable service in the behind-only feed (#1702)", async () => {
+    // svc_app was carried into the deployment without being recreated, so its
+    // row has no digest — while the registry HAS resolved its tag. The feed
+    // used to drop the project as "up to date"; it now surfaces it flagged.
+    setupImageProject();
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_app", imageRef: "twenty-ven-production:local", imageDigest: null },
+      { serviceId: "svc_db", imageRef: "postgres:16-alpine", imageDigest: "sha256:2222222222222222" },
+    ]);
+    resolveUpstreamDrift.mockResolvedValue({
+      ...imageUpstream,
+      digestByRef: {
+        "twenty-ven-production:local": "sha256:3333333333333333",
+        "postgres:16-alpine": "sha256:2222222222222222",
+      },
+    });
+
+    const [item] = await listOrganizationUpdates(ctx, { behindOnly: true });
+
+    expect(item).toMatchObject({
+      projectId: "proj_images",
+      kind: "image",
+      behind: false,
+      unverified: true,
+    });
+    expect((item.detail as { services: unknown[] }).services).toEqual([
+      expect.objectContaining({ serviceId: "svc_app", unknown: true, behind: false }),
+      expect.objectContaining({ serviceId: "svc_db", unknown: false, behind: false }),
+    ]);
+    // And applying still refuses: an unverified service is not a confirmed update.
+    await expect(applyProjectUpdate(ctx, imageProject.id)).rejects.toThrow(
+      "No newer service images",
+    );
+  });
+
   it("applies only the moved sidecar and excludes the local image from the deployment", async () => {
     setupImageProject();
 

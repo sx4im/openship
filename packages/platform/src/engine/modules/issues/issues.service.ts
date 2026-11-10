@@ -372,6 +372,23 @@ function updateIssue(row: UpdateRow): SystemIssue {
       ? `${row.currentLabel} → ${row.latestLabel}`
       : (row.latestLabel ?? "");
 
+  // An unverified row is not an available update: the deployed digest is
+  // missing, so the comparison never ran. Name the services when the feed
+  // carried them, and offer no Update button — apply would 400 with "no newer
+  // service images could be confirmed".
+  const unverified = Boolean(row.unverified) && !row.behind;
+  const unknownNames = unverified
+    ? (((row.detail as { services?: Array<{ name?: string; unknown?: boolean }> } | undefined)?.services ?? [])
+        .filter((s) => s.unknown)
+        .map((s) => s.name)
+        .filter((n): n is string => Boolean(n)))
+    : [];
+  const message = unverified
+    ? `Update status couldn't be verified — the deployed image digest is unknown${
+        unknownNames.length ? ` for ${unknownNames.join(", ")}` : ""
+      }. A full redeploy records it.`
+    : version;
+
   return {
     id: `update:${row.projectId}`,
     kind: "update_available",
@@ -379,13 +396,14 @@ function updateIssue(row: UpdateRow): SystemIssue {
     scope: isSelf ? "platform" : "project",
     source: "update",
     title: row.name,
-    message: version,
+    message,
     details: {
       kind: row.kind,
       currentLabel: row.currentLabel,
       latestLabel: row.latestLabel,
       latestInProgress: row.latestInProgress,
       inProgressDeploymentId: row.inProgressDeploymentId,
+      unverified: Boolean(row.unverified),
       selfUpdate: isSelf,
     },
     target: {
@@ -400,7 +418,7 @@ function updateIssue(row: UpdateRow): SystemIssue {
           ? `/build/${row.inProgressDeploymentId}`
           : `/projects/${row.projectId}`,
     },
-    resolveWith: isSelf
+    resolveWith: isSelf || unverified
       ? []
       : [{ label: "Update", method: "POST", path: `/api/updates/${row.projectId}/apply` }],
   };
@@ -572,7 +590,9 @@ export async function listOrganizationIssues(
     if (!(await visible("project", row.projectId))) continue;
     // Keep the row while its update finishes, including after cutover clears
     // drift. Every surface can show progress instead of offering another update.
-    if (!row.behind && !row.latestInProgress) continue;
+    // An unverified row is kept too: the feed could not tell whether the
+    // project is up to date, and dropping it would repeat the #1702 silence.
+    if (!row.behind && !row.latestInProgress && !row.unverified) continue;
     issues.push(updateIssue(row));
   }
 

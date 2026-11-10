@@ -481,6 +481,7 @@ async function driftItem(
     appTemplateId: project.appTemplateId ?? null,
     kind: status.mode,
     behind: status.behind,
+    unverified: status.unverified,
     latestInProgress: status.latestInProgress,
     inProgressDeploymentId: status.inProgressDeploymentId,
     currentLabel: view.currentLabel,
@@ -531,9 +532,11 @@ export async function listOrganizationUpdates(
     if (item) items.push(item);
   });
 
-  // Deterministic despite the concurrency: behind first, then by name.
-  items.sort((a, b) => Number(b.behind) - Number(a.behind) || a.name.localeCompare(b.name));
-  return opts?.behindOnly ? items.filter((i) => i.behind || i.latestInProgress) : items;
+  // Deterministic despite the concurrency: behind first, then unverified
+  // (a project we could not check is worth attention, just not an update),
+  // then by name.
+  items.sort((a, b) => Number(b.behind) - Number(a.behind) || Number(b.unverified) - Number(a.unverified) || a.name.localeCompare(b.name));
+  return opts?.behindOnly ? items.filter((i) => i.behind || i.latestInProgress || i.unverified) : items;
 }
 
 /**

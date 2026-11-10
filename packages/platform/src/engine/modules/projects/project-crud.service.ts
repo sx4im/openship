@@ -2610,6 +2610,7 @@ export async function evaluateDrift(
       supported: true as const,
       mode: "commit" as const,
       behind,
+      unverified: false,
       latestInProgress,
       inProgressDeploymentId,
       branch: projectBranch(p),
@@ -2630,6 +2631,7 @@ export async function evaluateDrift(
       supported: true as const,
       mode: "release" as const,
       behind,
+      unverified: false,
       latestInProgress,
       inProgressDeploymentId,
       latestVersion: latest,
@@ -2661,6 +2663,13 @@ export async function evaluateDrift(
         ref,
         digest: latestDigest ?? undefined,
       };
+      const behind = latestDigest ? isBehind(current, latest) : false;
+      // Unknown, not up to date (#1702): the registry resolved this tag but
+      // the active row carries no digest — a service carried into a deployment
+      // without being recreated — so the comparison never ran. `!behind`
+      // already pins the ref: a retag is behind by the ref comparison, and an
+      // unresolvable upstream stays fail-soft (the retry machinery owns it).
+      const unknown = !behind && latestDigest !== null && !running?.digest;
       return {
         serviceId: svc.id,
         name: svc.name,
@@ -2668,13 +2677,15 @@ export async function evaluateDrift(
         deployedDigest: running?.digest ?? null,
         latestDigest,
         // Fail-soft: a digest we couldn't resolve is not evidence of drift.
-        behind: latestDigest ? isBehind(current, latest) : false,
+        behind,
+        unknown,
       };
     });
     return {
       supported: true as const,
       mode: "image" as const,
       behind: services.some((s) => s.behind),
+      unverified: services.some((s) => s.unknown),
       latestInProgress: active?.trigger === "update",
       inProgressDeploymentId,
       services,

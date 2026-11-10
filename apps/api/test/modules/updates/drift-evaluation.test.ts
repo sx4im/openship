@@ -380,6 +380,80 @@ describe("image drift — digests keyed by the ref they were polled for", () => 
     expect(status).toMatchObject({ behind: true });
   });
 
+  it("marks a service unknown — not up to date — when its deployed digest is missing (#1702)", async () => {
+    // A service carried into a deployment without being recreated has a NULL
+    // image_digest, so the registry comparison has nothing to compare — and
+    // the feed read that as "not behind" with no trace the check never ran.
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "n8nio/n8n:1.2", imageDigest: null },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "n8nio/n8n:1.2": "sha256:new" },
+    });
+
+    expect(status).toMatchObject({ behind: false, unverified: true });
+    expect((status as { services: unknown[] }).services).toEqual([
+      expect.objectContaining({ serviceId: "svc_1", behind: false, unknown: true }),
+    ]);
+  });
+
+  it("does not mark a service unknown when its deployed digest is known", async () => {
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "n8nio/n8n:1.2", imageDigest: "sha256:same" },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "n8nio/n8n:1.2": "sha256:same" },
+    });
+
+    expect(status).toMatchObject({ behind: false, unverified: false });
+    expect((status as { services: unknown[] }).services).toEqual([
+      expect.objectContaining({ serviceId: "svc_1", behind: false, unknown: false }),
+    ]);
+  });
+
+  it("reports behind, not unknown, when a retagged service has no digest", async () => {
+    // The ref itself moved, so the ref comparison is evidence — the missing
+    // digest doesn't make the verdict unknown.
+    serviceRepo.listByProject.mockResolvedValue([svc({ image: "n8nio/n8n:1.3" })]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "n8nio/n8n:1.2", imageDigest: null },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "n8nio/n8n:1.3": "sha256:new" },
+    });
+
+    expect(status).toMatchObject({ behind: true, unverified: false });
+  });
+
+  it("stays fail-soft when the upstream digest could not be resolved", async () => {
+    // An unresolvable registry is a different unknown than a missing deployed
+    // digest — the retry/backoff machinery owns it, and the feed must not
+    // start flagging every project whose registry blipped.
+    serviceRepo.listByProject.mockResolvedValue([svc()]);
+    serviceRepo.listByDeployment.mockResolvedValue([
+      { serviceId: "svc_1", imageRef: "n8nio/n8n:1.2", imageDigest: null },
+    ]);
+
+    const status = await evaluateDrift(imageProject(), {
+      supported: true,
+      mode: "image",
+      digestByRef: { "n8nio/n8n:1.2": null },
+    });
+
+    expect(status).toMatchObject({ behind: false, unverified: false });
+  });
+
   it("ignores a digest polled for a tag the service no longer uses", async () => {
     // Service retagged 1.2 → 1.3 and redeployed. The cached digest for 1.2 must
     // not be compared against 1.3's running digest, or the app reads as behind
