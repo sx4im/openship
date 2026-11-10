@@ -526,6 +526,17 @@ function withCapability(root: string, leaf: string, action: Action) {
  * scanner won't verify the route was actually mounted with this — prefer
  * the wrapper so coverage is guaranteed.
  */
+
+/** True when the request authenticated with a PAT or an OAuth token — the
+ *  principals whose activity the audit log must attribute per token. */
+function isTokenPrincipal(c: Context): boolean {
+  try {
+    return getRequestContext(c).principalKind != null;
+  } catch {
+    return false; // Pre-auth, or a route that never builds a ctx.
+  }
+}
+
 export function requirePermission(spec: PermissionSpec): MiddlewareHandler {
   const parsed = parsePermissionTag(spec.tag);
   const idsMap = spec.ids ?? {};
@@ -758,12 +769,23 @@ export function requirePermission(spec: PermissionSpec): MiddlewareHandler {
       throw new Error("An operation-authorized route did not apply its authorized context");
 
     // After handler success: emit an audit event for write/admin/list-
-    // -with-side-effects. Read/list are typically too noisy to log unless
-    // the route opts in (TODO: per-route auditOnRead flag).
+    // -with-side-effects. Reads and lists are audited too, but only when the
+    // caller is a token principal: for a script holding a PAT, "what did it
+    // look at" is the whole question, the same reason MCP tool calls audit
+    // their reads (mcp-audit.ts). Browser reads stay unaudited — the
+    // dashboard's own activity would drown the log. Reads of the audit log
+    // itself are never audited: every listing would add a row the next
+    // listing shows, a feedback loop, not a record. See #1703.
     const action = parsed.action;
+    const auditable =
+      action === "write" ||
+      action === "admin" ||
+      ((action === "read" || action === "list") &&
+        isTokenPrincipal(c) &&
+        parsed.leaf !== "audit");
     // A cloud proxy may finish before reaching a migrated operation. Only skip
     // this emitter when that operation actually recorded this invocation.
-    if ((!spec.auditHandledByOperation || !c.get("operationAuditRecorded")) && (action === "write" || action === "admin")) {
+    if ((!spec.auditHandledByOperation || !c.get("operationAuditRecorded")) && auditable) {
       const status = c.res.status;
       if (status >= 200 && status < 400) {
         // For CREATE flows, the handler stamps the new id via

@@ -15,8 +15,10 @@ export interface AuditContext {
   userAgent?: string | null;
   /** Where the action came in from. Filled by `auditContextFrom`. */
   source?: AuditSource | null;
-  /** Which client of that surface — `oauth:<clientId>` / `pat:<tokenId>`. Only
-   *  MCP dispatch sets it; see call-source.ts. */
+  /** Which client of that surface — `oauth:<clientId>` / `pat:<tokenId>`. The
+   *  MCP dispatcher signs it on its header; for a direct REST call it is the
+   *  principal id the auth layer minted — see call-source.ts. Null for
+   *  browser and system rows, which have one client per request. */
   sourceClientId?: string | null;
 }
 

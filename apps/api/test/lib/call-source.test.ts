@@ -60,8 +60,8 @@ const BROWSER_UA = "Mozilla/5.0 (Macintosh)";
 
 const cookieCtx = { sessionKind: "cookie", principalKind: null };
 const zeroAuthCtx = { sessionKind: "zero-auth", principalKind: null };
-const oauthCtx = { sessionKind: "bearer", principalKind: "oauth" };
-const patCtx = { sessionKind: "bearer", principalKind: "pat" };
+const oauthCtx = { sessionKind: "bearer", principalKind: "oauth", sessionId: "oauth:cli_abc" };
+const patCtx = { sessionKind: "bearer", principalKind: "pat", sessionId: "pat:pat_123" };
 
 describe("a claimed source is trusted only when it came from this process", () => {
   it("trusts the header the MCP dispatcher sends", async () => {
@@ -186,11 +186,31 @@ describe("which client of the surface", () => {
     expect(await clientFor({ headers: internalClientHeader("pat:pat_123") })).toBe("pat:pat_123");
   });
 
-  it("is null when nobody claimed one — never guessed from the credential", async () => {
-    // A browser and the CLI have one client per request; a value here would be
-    // invented rather than reported.
+  it("derives the client id from the credential when the caller is a token principal", async () => {
+    // A PAT is not "one client per request": one user holds many tokens, the
+    // token is the unit an operator revokes, and without it two tokens' rows
+    // are indistinguishable. The id comes from the auth layer's own lookup,
+    // not from anything the caller supplies, so it is as trustworthy as
+    // actorUserId on the same row. See #1703.
+    expect(await clientFor({ ctx: patCtx, headers: { "user-agent": CLI_UA } })).toBe("pat:pat_123");
+    expect(await clientFor({ ctx: patCtx })).toBe("pat:pat_123");
+    expect(await clientFor({ ctx: oauthCtx })).toBe("oauth:cli_abc");
+  });
+
+  it("is still null for a browser session — one client per request there", async () => {
     expect(await clientFor({ ctx: cookieCtx })).toBeNull();
-    expect(await clientFor({ ctx: patCtx, headers: { "user-agent": CLI_UA } })).toBeNull();
+    expect(await clientFor({ ctx: zeroAuthCtx })).toBeNull();
+  });
+
+  it("is still null when there is no RequestContext to derive from", async () => {
+    expect(await clientFor({})).toBeNull();
+  });
+
+  it("ignores a principal id that is not a well-formed client id", async () => {
+    // Defensive: the auth layer only ever mints `pat:` / `oauth:` ids, but a
+    // malformed session id must never reach the audit UI.
+    const weird = { sessionKind: "bearer", principalKind: "pat", sessionId: "session_abc" };
+    expect(await clientFor({ ctx: weird })).toBeNull();
   });
 
   it("ignores a forged claim — attribution a caller can write is worse than none", async () => {

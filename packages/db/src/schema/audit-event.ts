@@ -63,16 +63,21 @@ export const auditEvent = pgTable(
     source: text("source"),
     /**
      * WHICH client of that surface, when the surface has more than one and the
-     * distinction matters forensically. Today that means MCP: `source` says an AI
-     * assistant acted, this says whether it was Claude Desktop or Cursor.
+     * distinction matters forensically. Today that means MCP — `source` says an AI
+     * assistant acted, this says whether it was Claude Desktop or Cursor — and
+     * REST calls made with a token: one user holds many PATs, and the token is
+     * the unit an operator revokes.
      *
      * Holds the canonical principal id the auth layer already mints —
      * `oauth:<clientId>` for a consented MCP app, `pat:<tokenId>` for a static
      * token — so it resolves to a name through a table that already exists and
-     * needs no new concept. Null for every other surface.
+     * needs no new concept. Null for browser and system rows, which have one
+     * client per request.
      *
-     * Carried on the same nonce-signed channel as `source`, for the same reason:
-     * an attributable row a caller could rewrite is worse than no attribution.
+     * For MCP it is carried on the same nonce-signed channel as `source`, for
+     * the same reason: an attributable row a caller could rewrite is worse than
+     * no attribution. For REST it comes from the auth layer's own credential
+     * lookup, not from any caller header — see call-source.ts.
      */
     sourceClientId: text("source_client_id"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -88,10 +93,10 @@ export const auditEvent = pgTable(
     index("audit_event_resource_idx").on(t.resourceType, t.resourceId),
     // "Only what the AI assistant did" — source filter, newest first.
     index("audit_event_org_source_idx").on(t.organizationId, t.source, t.createdAt.desc()),
-    // "Only what THIS agent did" — per-connection feed. PARTIAL: only MCP rows
-    // carry a client id, and tool-call rows are the highest-volume writer in the
-    // table, so an unfiltered index here would be mostly NULLs paid for on every
-    // insert.
+    // "Only what THIS agent did" — per-connection feed. PARTIAL: only token
+    // rows carry a client id, and tool-call rows are the highest-volume writer
+    // in the table, so an unfiltered index here would be mostly NULLs paid for
+    // on every insert.
     index("audit_event_org_client_idx")
       .on(t.organizationId, t.sourceClientId, t.createdAt.desc())
       .where(sql`${t.sourceClientId} IS NOT NULL`),

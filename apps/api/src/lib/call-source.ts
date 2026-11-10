@@ -87,13 +87,34 @@ function trustedClaim(c: Context): AuditSource | null {
  * Which client of the surface made this request — `oauth:<clientId>` /
  * `pat:<tokenId>` — or null when nobody trustworthy said.
  *
- * Deliberately NOT derived from the credential as a fallback: the surfaces that
- * have one client per request (a browser, the CLI) gain nothing from the column,
- * and guessing here would put a value in it that no dispatcher stands behind.
+ * The nonce-signed header from the MCP dispatcher wins: it is the only claim
+ * that can distinguish two clients behind one credential. When it is absent,
+ * the credential itself answers — but only for token principals. A browser
+ * session has no principalKind, so it still gets null: one client per request
+ * there, nothing to attribute. A PAT is different: one user holds many tokens,
+ * the token is the unit an operator revokes, and without it two tokens' rows
+ * are indistinguishable. The id comes from the auth layer's own credential
+ * lookup (auth.ts resolves the bearer to a principal id), not from anything
+ * the caller supplies, so it is exactly as trustworthy as actorUserId on the
+ * same row. See #1703.
  */
 export function resolveCallClientId(c: Context): string | null {
   const claimed = signedPayload(c.req.header(CALL_CLIENT_HEADER));
-  return isAuditClientId(claimed) ? claimed : null;
+  if (isAuditClientId(claimed)) return claimed;
+  return credentialClientId(c);
+}
+
+/** The principal id the auth layer minted for this request, or null when the
+ *  request did not authenticate with a multi-client credential. */
+function credentialClientId(c: Context): string | null {
+  let ctx: ReturnType<typeof getRequestContext> | null = null;
+  try {
+    ctx = getRequestContext(c);
+  } catch {
+    return null; // Pre-auth, or a route that never builds a ctx.
+  }
+  if (!ctx.principalKind) return null;
+  return isAuditClientId(ctx.sessionId) ? ctx.sessionId : null;
 }
 
 /**
